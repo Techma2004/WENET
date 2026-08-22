@@ -1,0 +1,155 @@
+import { useEffect, useRef, useState } from 'react';
+import { api } from './lib/api';
+import { useAuth } from './lib/auth';
+import { useChat } from './lib/chatStore';
+import { connectSocket, disconnectSocket } from './lib/socket';
+import { unwrapGroupKey, wrapGroupKeyForMember } from './lib/crypto';
+import AuthScreen from './components/AuthScreen';
+import Sidebar from './components/Sidebar';
+import ChatWindow from './components/ChatWindow';
+import type { Message, User } from './lib/types';
+
+type ConnState = 'connecting' | 'online' | 'offline';
+
+// Small local cache so we don't refetch the same user profile repeatedly
+// while messages / key requests stream in.
+const peerCache = new Map<string, User>();
+async function resolvePeer(userId: string): Promise<User | null> {
+  if (peerCache.has(userId)) return peerCache.get(userId)!;
+  try {
+    const res = await api.get<User>(`/api/auth/user/${userId}`);
+    peerCache.set(userId, res.data);
+    return res.data;
+  } catch {
+    return null;
+  }
+}
+
+export default function App() {
+  const { user, token, privateJwk, restore } = useAuth();
+  const {
+    activeChat,
+    closeChat,
+    decryptAndStoreDM,
+    decryptAndStoreGroup,
+    upsertConversationFromMessage,
+    setTyping,
+    loadConversations,
+    loadGroups,
+    loadContacts,
+    getGroupKey,
+    setGroupKey
+  } = useChat();
+  const [restoring, setRestoring] = useState(true);
+  const [connState, setConnState] = useState<ConnState>('connecting');
+  const socketRef = useRef<ReturnType<typeof connectSocket> | null>(null);
+
+  useEffect(() => {
+    restore().finally(() => setRestoring(false));
+  }, []);
+
+  useEffect(() => {
+    if (!token || !user) return;
+    const socket = connectSocket(token);
+    socketRef.current = socket;
+    setConnState('connecting');
+
+    socket.on('connect', () => setConnState('online'));
+    socket.on('disconnect', () => setConnState('offline'));
+    socket.on('connect_error', () => setConnState('offline'));
+
+    socket.on('flush_messages', async (msgs: Message[]) => {
+      if (!privateJwk) return;
+      for (const m of msgs) {
+        const peerId = m.senderId === user.id ? m.recipientId! : m.senderId;
+        const peer = await resolvePeer(peerId);
+        if (peer) await decryptAndStoreDM(m.roomId, m, peer, privateJwk);
+      }
+      loadConversations();
+    });
+
+    socket.on('server:new_message', async (m: Message) => {
+      if (!privateJwk) return;
+      if (m.groupId) {
+        await decryptAndStoreGroup(m.groupId, m);
+        return;
+      }
+      const peerId = m.senderId === user.id ? m.recipientId! : m.senderId;
+      const peer = await resolvePeer(peerId);
+      if (peer) {
+        await decryptAndStoreDM(m.roomId, m, peer, privateJwk);
+        upsertConversationFromMessage(m.roomId, m, peer);
+      }
+    });
+
+    socket.on('server:typing', ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
+      setTyping(userId, isTyping);
+    });
+
+    // Someone in a group we're in is missing the key (new device, etc). If
+    // we already hold it, hand them a copy wrapped just for them.
+    socket.on('server:group_key_requested', async ({ groupId, requesterId }: { groupId: string; requesterId: string }) => {
+      if (!privateJwk || requesterId === user.id) return;
+      const key = await getGroupKey(groupId);
+      if (!key) return;
+      const requester = await resolvePeer(requesterId);
+      if (!requester?.publicKey) return;
+      const { wrappedKey, iv } = await wrapGroupKeyForMember(privateJwk, requester.publicKey, key);
+      socket.emit('client:share_group_key', { groupId, toUserId: requesterId, wrappedKey, iv });
+    });
+
+    // Someone answered our key request (or shared it with us at group creation time).
+    socket.on(
+      'server:group_key',
+      async ({ groupId, fromUserId, wrappedKey, iv }: { groupId: string; fromUserId: string; wrappedKey: string; iv: string }) => {
+        if (!privateJwk) return;
+        const existing = await getGroupKey(groupId);
+        if (existing) return;
+        const sender = await resolvePeer(fromUserId);
+        if (!sender?.publicKey) return;
+        try {
+          const key = await unwrapGroupKey(privateJwk, sender.publicKey, wrappedKey, iv);
+          await setGroupKey(groupId, key);
+        } catch {
+          // wrapped for someone else, or corrupted - ignore
+        }
+      }
+    );
+
+    loadConversations();
+    loadGroups();
+    loadContacts();
+
+    return () => {
+      disconnectSocket();
+    };
+  }, [token, user?.id]);
+
+  if (restoring) {
+    return (
+      <div className="splash">
+        <div className="splash-dot" />
+      </div>
+    );
+  }
+
+  if (!user || !token) {
+    return <AuthScreen />;
+  }
+
+  return (
+    <div className={`app ${activeChat ? 'chat-open' : ''}`}>
+      <Sidebar connState={connState} />
+      <div className="chat-pane">
+        {activeChat ? (
+          <ChatWindow onBack={closeChat} />
+        ) : (
+          <div className="empty-state">
+            <div className="empty-state-mark">W</div>
+            <p>Pick a conversation, search a username to start one, or create a group.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

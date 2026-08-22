@@ -1,0 +1,17 @@
+# Secrets - NEVER commit
+backend/.env
+frontend/.env
+.env
+*.json
+**/serviceAccount*.json
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Deps & build
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+backend/dist/
+frontend/dist/
+.expo/
+.DS_Store
