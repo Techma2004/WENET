@@ -1,5 +1,23 @@
-# Secrets - NEVER commit
-backend/.env
-frontend/.env
-.env
+# Dependencies
+node_modules/
 
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

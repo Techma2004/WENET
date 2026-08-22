@@ -15,25 +15,26 @@ model User {
   displayName  String
   bio          String?       @default("Hey there! I'm on WENET")
   avatarUrl    String?
-  publicKey    String        @db.Text
+  publicKey    String
   isOnline     Boolean       @default(false)
   lastSeen     DateTime      @default(now())
+  createdAt    DateTime      @default(now())
+  blockedBy    Block[]       @relation("blocked")
+  blocked      Block[]       @relation("blocker")
+  contactOf    Contact[]     @relation("contact")
+  contacts     Contact[]     @relation("owner")
   devices      Device[]
   groupMembers GroupMember[]
-  contacts     Contact[]     @relation("owner")
-  blocked      Block[]       @relation("blocker")
-  blockedBy    Block[]       @relation("blocked")
   reactions    Reaction[]
   statuses     Status[]
-  createdAt    DateTime      @default(now())
 }
 
 model Device {
   id       String   @id @default(uuid())
   userId   String
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   fcmToken String?
   lastSeen DateTime @default(now())
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -46,16 +47,16 @@ model Group {
   createdBy   String
   isGroup     Boolean       @default(true)
   inviteLink  String        @unique @default(uuid())
+  createdAt   DateTime      @default(now())
   members     GroupMember[]
   messages    Message[]
-  createdAt   DateTime      @default(now())
 }
 
 model GroupMember {
   id       String   @id @default(uuid())
   groupId  String
   userId   String
-  role     String   @default("MEMBER") // ADMIN, MEMBER
+  role     String   @default("MEMBER")
   joinedAt DateTime @default(now())
   group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -65,25 +66,25 @@ model GroupMember {
 }
 
 model Message {
-  id              String        @id @default(cuid())
-  clientMessageId String        @unique
-  roomId          String // for 1:1 = sorted user ids, for group = groupId
-  senderId        String
-  recipientId     String? // null for group messages
-  groupId         String?
-  group           Group?        @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  encryptedPayload String       @db.Text
-  iv              String
-  replyToId       String?
-  mediaUrl        String?
-  mediaThumbUrl   String?
-  mediaType       String? // image, video, audio, file
-  isEdited        Boolean       @default(false)
-  isDeleted       Boolean       @default(false)
-  createdAt       DateTime      @default(now())
-  deliveredAt     DateTime?
-  readBy          MessageRead[]
-  reactions       Reaction[]
+  id               String        @id @default(cuid())
+  clientMessageId  String        @unique
+  roomId           String
+  senderId         String
+  recipientId      String?
+  groupId          String?
+  encryptedPayload String
+  iv               String
+  replyToId        String?
+  mediaUrl         String?
+  mediaThumbUrl    String?
+  mediaType        String?
+  isEdited         Boolean       @default(false)
+  isDeleted        Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  deliveredAt      DateTime?
+  group            Group?        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  readBy           MessageRead[]
+  reactions        Reaction[]
 
   @@index([roomId])
   @@index([groupId])
@@ -101,12 +102,12 @@ model MessageRead {
 }
 
 model Reaction {
-  id        String   @id @default(uuid())
+  id        String  @id @default(uuid())
   messageId String
   userId    String
   emoji     String
-  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
 }
@@ -115,8 +116,9 @@ model Contact {
   id        String   @id @default(uuid())
   ownerId   String
   contactId String
-  owner     User     @relation("owner", fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+  contact   User     @relation("contact", fields: [contactId], references: [id], onDelete: Cascade)
+  owner     User     @relation("owner", fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@unique([ownerId, contactId])
 }
@@ -125,8 +127,8 @@ model Block {
   id        String @id @default(uuid())
   blockerId String
   blockedId String
-  blocker   User   @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
   blocked   User   @relation("blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  blocker   User   @relation("blocker", fields: [blockerId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedId])
 }
@@ -137,7 +139,7 @@ model Status {
   mediaUrl  String
   mediaType String   @default("image")
   caption   String?
-  expiresAt DateTime // 24h later
+  expiresAt DateTime
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
