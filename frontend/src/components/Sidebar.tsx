@@ -8,6 +8,7 @@ import Avatar from './Avatar';
 import NewGroupModal from './NewGroupModal';
 import ContactsPanel from './ContactsPanel';
 import AccountSettingsModal from './AccountSettingsModal';
+import { ConversationListSkeleton } from './Skeletons';
 
 const CONN_LABEL: Record<string, string> = {
   connecting: 'Connecting…',
@@ -17,21 +18,28 @@ const CONN_LABEL: Record<string, string> = {
 
 export default function Sidebar({ connState }: { connState: 'connecting' | 'online' | 'offline' }) {
   const { user, logout } = useAuth();
-  const { conversations, groups, openConversation, openGroup, activeChat } = useChat();
+  const { conversations, groups, openConversation, openGroup, activeChat, conversationsLoading, groupsLoading } = useChat();
   const [tab, setTab] = useState<'chats' | 'contacts' | 'groups'>('chats');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<User[]>([]);
+  const [searching, setSearching] = useState(false);
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
+      setSearching(false);
       return;
     }
+    setSearching(true);
     const handle = setTimeout(async () => {
-      const res = await api.get<User[]>('/api/auth/search', { params: { q: query } });
-      setResults(res.data.filter((u) => u.id !== user?.id));
+      try {
+        const res = await api.get<User[]>('/api/auth/search', { params: { q: query } });
+        setResults(res.data.filter((u) => u.id !== user?.id));
+      } finally {
+        setSearching(false);
+      }
     }, 250);
     return () => clearTimeout(handle);
   }, [query, user?.id]);
@@ -83,7 +91,9 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
           <ContactsPanel />
         ) : tab === 'chats' ? (
           query.trim() ? (
-            results.length ? (
+            searching ? (
+              <ConversationListSkeleton count={3} />
+            ) : results.length ? (
               results.map((u) => (
                 <button key={u.id} className="conversation-row" onClick={() => openConversation(u)}>
                   <Avatar name={u.displayName} url={u.avatarUrl} online={u.isOnline} />
@@ -96,6 +106,8 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
             ) : (
               <div className="sidebar-empty">No users found for "{query}"</div>
             )
+          ) : conversationsLoading ? (
+            <ConversationListSkeleton />
           ) : conversations.length ? (
             conversations.map((c) => (
               <button
@@ -113,6 +125,8 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
           ) : (
             <div className="sidebar-empty">No conversations yet. Search a username above to start one.</div>
           )
+        ) : groupsLoading ? (
+          <ConversationListSkeleton count={3} />
         ) : groups.length ? (
           groups.map((g) => (
             <button

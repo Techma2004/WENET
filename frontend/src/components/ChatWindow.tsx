@@ -3,6 +3,7 @@ import { useAuth } from '../lib/auth';
 import { useChat } from '../lib/chatStore';
 import { getSocket } from '../lib/socket';
 import Avatar from './Avatar';
+import { MessageListSkeleton } from './Skeletons';
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -10,7 +11,19 @@ function formatTime(iso: string) {
 
 export default function ChatWindow({ onBack }: { onBack: () => void }) {
   const { user, privateJwk } = useAuth();
-  const { activeChat, messagesByRoom, sendDirectMessage, sendGroupMessage, typingUserIds, getGroupKey } = useChat();
+  const {
+    activeChat,
+    messagesByRoom,
+    sendDirectMessage,
+    sendGroupMessage,
+    typingUserIds,
+    getGroupKey,
+    activeChatLoading,
+    activeChatError,
+    openConversation,
+    openGroup,
+    retryMessage
+  } = useChat();
   const [text, setText] = useState('');
   const [hasGroupKey, setHasGroupKey] = useState(true);
   const [sendError, setSendError] = useState('');
@@ -45,6 +58,18 @@ export default function ChatWindow({ onBack }: { onBack: () => void }) {
     if (activeChat?.type !== 'dm') return;
     getSocket()?.emit('client:typing', { roomId, isTyping });
   };
+
+  function retry() {
+    if (!activeChat) return;
+    if (activeChat.type === 'dm') openConversation(activeChat.peer);
+    else openGroup(activeChat.group);
+  }
+
+  function retrySend(clientMessageId: string) {
+    const socket = getSocket();
+    if (!socket) return;
+    retryMessage(roomId, clientMessageId, (event, data, cb) => socket.emit(event, data, cb));
+  }
 
   const onChangeText = (value: string) => {
     setText(value);
@@ -115,29 +140,61 @@ export default function ChatWindow({ onBack }: { onBack: () => void }) {
       </div>
 
       <div className="message-list">
-        {activeChat.type === 'dm' && !privateJwk && (
-          <div className="message-list-warning">
-            No local encryption key found for your account — messages sent from here can't be decrypted by this browser.
+        {activeChatLoading ? (
+          <MessageListSkeleton />
+        ) : activeChatError ? (
+          <div className="empty-inline centered">
+            {activeChatError}{' '}
+            <button className="link-btn" onClick={retry}>
+              Try again
+            </button>
           </div>
+        ) : (
+          <>
+            {activeChat.type === 'dm' && !privateJwk && (
+              <div className="message-list-warning">
+                No local encryption key found for your account — messages sent from here can't be decrypted by this
+                browser.
+              </div>
+            )}
+            {activeChat.type === 'group' && !hasGroupKey && (
+              <div className="message-list-warning">
+                Waiting for another online group member to share the encryption key. You can still type — it'll send
+                once the key arrives.
+              </div>
+            )}
+            {messages.length === 0 && (
+              <div className="empty-inline centered">
+                No messages yet. Say hello to {activeChat.type === 'dm' ? activeChat.peer.displayName : 'the group'}.
+              </div>
+            )}
+            {messages.map((m) => (
+              <div key={m.clientMessageId} className={`bubble-row ${m.senderId === user?.id ? 'mine' : 'theirs'}`}>
+                <div className="bubble">
+                  {activeChat.type === 'group' && m.senderId !== user?.id && (
+                    <span className="bubble-sender">
+                      {activeChat.group.members.find((mm) => mm.userId === m.senderId)?.user.displayName || 'Member'}
+                    </span>
+                  )}
+                  <span>{m.text || '[unable to decrypt]'}</span>
+                  <span className="bubble-time">
+                    {formatTime(m.createdAt)}
+                    {m.status === 'sending' && ' · Sending…'}
+                    {m.status === 'failed' && (
+                      <>
+                        {' · Not delivered — '}
+                        <button className="link-btn bubble-retry" onClick={() => retrySend(m.clientMessageId)}>
+                          Retry
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </>
         )}
-        {activeChat.type === 'group' && !hasGroupKey && (
-          <div className="message-list-warning">
-            Waiting for another online group member to share the encryption key. You can still type — it'll send once the
-            key arrives.
-          </div>
-        )}
-        {messages.map((m) => (
-          <div key={m.clientMessageId} className={`bubble-row ${m.senderId === user?.id ? 'mine' : 'theirs'}`}>
-            <div className="bubble">
-              {activeChat.type === 'group' && m.senderId !== user?.id && (
-                <span className="bubble-sender">{activeChat.group.members.find((mm) => mm.userId === m.senderId)?.user.displayName || 'Member'}</span>
-              )}
-              <span>{m.text || '[unable to decrypt]'}</span>
-              <span className="bubble-time">{formatTime(m.createdAt)}</span>
-            </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
       </div>
 
       {sendError && <div className="composer-error">{sendError}</div>}

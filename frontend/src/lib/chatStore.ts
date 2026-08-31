@@ -24,6 +24,11 @@ interface ChatState {
   groupKeys: Map<string, CryptoKey>;
   activeChat: ActiveChat;
   typingUserIds: Set<string>;
+  conversationsLoading: boolean;
+  groupsLoading: boolean;
+  contactsLoading: boolean;
+  activeChatLoading: boolean;
+  activeChatError: string | null;
 
   loadConversations: () => Promise<void>;
   loadGroups: () => Promise<void>;
@@ -66,6 +71,8 @@ interface ChatState {
   }) => Promise<void>;
 
   setTyping: (userId: string, isTyping: boolean) => void;
+  retryMessage: (roomId: string, clientMessageId: string, emit: (event: string, data: any, cb?: (r: any) => void) => void) => void;
+  _markFailed: (roomId: string, clientMessageId: string) => void;
 }
 
 export function roomIdFor(a: string, b: string) {
@@ -81,20 +88,40 @@ export const useChat = create<ChatState>((set, get) => ({
   groupKeys: new Map(),
   activeChat: null,
   typingUserIds: new Set(),
+  conversationsLoading: false,
+  groupsLoading: false,
+  contactsLoading: false,
+  activeChatLoading: false,
+  activeChatError: null,
 
   loadConversations: async () => {
-    const res = await api.get<Conversation[]>('/api/messages/conversations');
-    set({ conversations: res.data });
+    set({ conversationsLoading: true });
+    try {
+      const res = await api.get<Conversation[]>('/api/messages/conversations');
+      set({ conversations: res.data });
+    } finally {
+      set({ conversationsLoading: false });
+    }
   },
 
   loadGroups: async () => {
-    const res = await api.get<Group[]>('/api/groups');
-    set({ groups: res.data });
+    set({ groupsLoading: true });
+    try {
+      const res = await api.get<Group[]>('/api/groups');
+      set({ groups: res.data });
+    } finally {
+      set({ groupsLoading: false });
+    }
   },
 
   loadContacts: async () => {
-    const res = await api.get<User[]>('/api/contacts');
-    set({ contacts: res.data });
+    set({ contactsLoading: true });
+    try {
+      const res = await api.get<User[]>('/api/contacts');
+      set({ contacts: res.data });
+    } finally {
+      set({ contactsLoading: false });
+    }
   },
 
   addContact: async (user: User) => {
@@ -108,38 +135,52 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   openConversation: async (peer: User) => {
-    set({ activeChat: { type: 'dm', peer } });
+    set({ activeChat: { type: 'dm', peer }, activeChatError: null });
     const { user, privateJwk } = useAuth.getState();
     if (!user || !privateJwk) return;
 
     const roomId = roomIdFor(user.id, peer.id);
     if (get().messagesByRoom[roomId]?.length) return;
 
-    const res = await api.get<Message[]>('/api/messages', { params: { roomId } });
-    const decrypted = await Promise.all(
-      res.data.map(async (m) => {
-        if (!peer.publicKey) return { ...m, text: '' };
-        const text = await decryptText(privateJwk, peer.publicKey, m.encryptedPayload, m.iv);
-        return { ...m, text };
-      })
-    );
-    set((state) => ({ messagesByRoom: { ...state.messagesByRoom, [roomId]: decrypted } }));
+    set({ activeChatLoading: true });
+    try {
+      const res = await api.get<Message[]>('/api/messages', { params: { roomId } });
+      const decrypted = await Promise.all(
+        res.data.map(async (m) => {
+          if (!peer.publicKey) return { ...m, text: '' };
+          const text = await decryptText(privateJwk, peer.publicKey, m.encryptedPayload, m.iv);
+          return { ...m, text };
+        })
+      );
+      set((state) => ({ messagesByRoom: { ...state.messagesByRoom, [roomId]: decrypted } }));
+    } catch {
+      set({ activeChatError: "Couldn't load this conversation. Check your connection and try again." });
+    } finally {
+      set({ activeChatLoading: false });
+    }
   },
 
   openGroup: async (group: Group) => {
-    set({ activeChat: { type: 'group', group } });
+    set({ activeChat: { type: 'group', group }, activeChatError: null });
     const key = await get().getGroupKey(group.id);
 
-    const res = await api.get<Message[]>('/api/messages', { params: { groupId: group.id } });
-    if (!key) {
-      set((state) => ({ pendingGroupMessages: { ...state.pendingGroupMessages, [group.id]: res.data } }));
-      return;
-    }
+    set({ activeChatLoading: true });
+    try {
+      const res = await api.get<Message[]>('/api/messages', { params: { groupId: group.id } });
+      if (!key) {
+        set((state) => ({ pendingGroupMessages: { ...state.pendingGroupMessages, [group.id]: res.data } }));
+        return;
+      }
 
-    const decrypted = await Promise.all(
-      res.data.map(async (m) => ({ ...m, text: await decryptWithGroupKey(key, m.encryptedPayload, m.iv) }))
-    );
-    set((state) => ({ messagesByRoom: { ...state.messagesByRoom, [group.id]: decrypted } }));
+      const decrypted = await Promise.all(
+        res.data.map(async (m) => ({ ...m, text: await decryptWithGroupKey(key, m.encryptedPayload, m.iv) }))
+      );
+      set((state) => ({ messagesByRoom: { ...state.messagesByRoom, [group.id]: decrypted } }));
+    } catch {
+      set({ activeChatError: "Couldn't load this group's messages. Check your connection and try again." });
+    } finally {
+      set({ activeChatLoading: false });
+    }
   },
 
   closeChat: () => set({ activeChat: null }),
@@ -239,7 +280,8 @@ export const useChat = create<ChatState>((set, get) => ({
       isEdited: false,
       isDeleted: false,
       createdAt: new Date().toISOString(),
-      text
+      text,
+      status: 'sending'
     };
 
     set((state) => ({
@@ -247,13 +289,14 @@ export const useChat = create<ChatState>((set, get) => ({
     }));
     get().upsertConversationFromMessage(roomId, optimistic, peer);
 
+    const timeout = setTimeout(() => get()._markFailed(roomId, clientMessageId), 15000);
     emit('client:send_message', { clientMessageId, recipientId: peer.id, encryptedPayload, iv }, (ack: { ok: boolean; id?: string }) => {
-      if (!ack?.ok) return;
+      clearTimeout(timeout);
       set((state) => ({
         messagesByRoom: {
           ...state.messagesByRoom,
           [roomId]: (state.messagesByRoom[roomId] || []).map((m) =>
-            m.clientMessageId === clientMessageId && ack.id ? { ...m, id: ack.id } : m
+            m.clientMessageId === clientMessageId ? { ...m, id: ack.id || m.id, status: ack?.ok ? 'sent' : 'failed' } : m
           )
         }
       }));
@@ -279,20 +322,63 @@ export const useChat = create<ChatState>((set, get) => ({
       isEdited: false,
       isDeleted: false,
       createdAt: new Date().toISOString(),
-      text
+      text,
+      status: 'sending'
     };
 
     set((state) => ({
       messagesByRoom: { ...state.messagesByRoom, [group.id]: [...(state.messagesByRoom[group.id] || []), optimistic] }
     }));
 
+    const timeout = setTimeout(() => get()._markFailed(group.id, clientMessageId), 15000);
     emit('client:send_message', { clientMessageId, groupId: group.id, encryptedPayload, iv }, (ack: { ok: boolean; id?: string }) => {
-      if (!ack?.ok) return;
+      clearTimeout(timeout);
       set((state) => ({
         messagesByRoom: {
           ...state.messagesByRoom,
           [group.id]: (state.messagesByRoom[group.id] || []).map((m) =>
-            m.clientMessageId === clientMessageId && ack.id ? { ...m, id: ack.id } : m
+            m.clientMessageId === clientMessageId ? { ...m, id: ack.id || m.id, status: ack?.ok ? 'sent' : 'failed' } : m
+          )
+        }
+      }));
+    });
+  },
+
+  // Internal: flips a still-"sending" message to "failed" if no ack arrived
+  // in time (e.g. the tab lost connection right as it sent). Not part of
+  // the public store interface — called via get() from the two send
+  // functions and from retryMessage below.
+  _markFailed: (roomId: string, clientMessageId: string) => {
+    set((state) => ({
+      messagesByRoom: {
+        ...state.messagesByRoom,
+        [roomId]: (state.messagesByRoom[roomId] || []).map((m) =>
+          m.clientMessageId === clientMessageId && m.status === 'sending' ? { ...m, status: 'failed' } : m
+        )
+      }
+    }));
+  },
+
+  retryMessage: (roomId, clientMessageId, emit) => {
+    const msg = (get().messagesByRoom[roomId] || []).find((m) => m.clientMessageId === clientMessageId);
+    if (!msg) return;
+    set((state) => ({
+      messagesByRoom: {
+        ...state.messagesByRoom,
+        [roomId]: state.messagesByRoom[roomId].map((m) => (m.clientMessageId === clientMessageId ? { ...m, status: 'sending' } : m))
+      }
+    }));
+    const timeout = setTimeout(() => get()._markFailed(roomId, clientMessageId), 15000);
+    const payload = msg.groupId
+      ? { clientMessageId, groupId: msg.groupId, encryptedPayload: msg.encryptedPayload, iv: msg.iv }
+      : { clientMessageId, recipientId: msg.recipientId, encryptedPayload: msg.encryptedPayload, iv: msg.iv };
+    emit('client:send_message', payload, (ack: { ok: boolean; id?: string }) => {
+      clearTimeout(timeout);
+      set((state) => ({
+        messagesByRoom: {
+          ...state.messagesByRoom,
+          [roomId]: (state.messagesByRoom[roomId] || []).map((m) =>
+            m.clientMessageId === clientMessageId ? { ...m, id: ack.id || m.id, status: ack?.ok ? 'sent' : 'failed' } : m
           )
         }
       }));

@@ -49,12 +49,19 @@ Backend, quick summary:
 | `CORS_ORIGIN` | yes in prod | Comma-separated allowed frontend origins |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | yes for media | Photo/video uploads |
 | `FCM_SERVICE_ACCOUNT_JSON` | no | Push notifications when a recipient is offline |
+| `RESEND_API_KEY` / `EMAIL_FROM` | no* | Verification + password-reset emails. Without it, links are logged to the server console instead — fine for local dev, not for production |
+| `APP_URL` | yes | Base URL the verify-email/reset-password links point to |
+| `SENTRY_DSN` | no | Backend crash reporting |
+| `POSTHOG_API_KEY` / `POSTHOG_HOST` | no | Backend analytics events |
 | `PORT` | no | Render sets this itself |
 
 Frontend:
 | Variable | Required | Purpose |
 |---|---|---|
 | `VITE_API_URL` | yes | Base URL of your deployed backend |
+| `VITE_SENTRY_DSN` | no | Frontend crash reporting |
+| `VITE_POSTHOG_KEY` / `VITE_POSTHOG_HOST` | no | Frontend analytics |
+| `VITE_FIREBASE_*` (6 values) + `VITE_FIREBASE_VAPID_KEY` | no | Push notifications. All-or-nothing — the "enable notifications" button just explains it's unavailable if these aren't set. If you do set them, also copy the same values into `frontend/public/firebase-messaging-sw.js` (service workers can't read `.env`) |
 
 ## Running locally
 
@@ -64,7 +71,7 @@ cd backend
 cp .env.example .env   # fill in DATABASE_URL and JWT_SECRET at minimum
 npm install
 npx prisma generate
-npx prisma migrate dev --name init
+npx prisma migrate deploy   # applies the hand-written migrations safely, even against existing data
 npm run dev             # http://localhost:10000
 
 # frontend, in a second terminal
@@ -86,13 +93,44 @@ npm run dev              # http://localhost:5173
 
 ## What's wired up vs. what's left
 
-Built and working: register/login, 1:1 chat, group chat, real-time delivery
-and typing indicators, online/offline presence, offline push notification
-fallback (if FCM is configured), responsive desktop/mobile layout, a
-Contacts tab (find by username or exact phone number, save/remove).
+Built and working: register/login with compulsory fields (username, display
+name, email, phone, password, terms acceptance), email verification,
+forgot/reset password, account deletion (password-confirmed, scrubs message
+content), 1:1 chat, group chat with real admin enforcement (only admins can
+remove members, change roles, or edit group info — previously stored but
+never checked), invite-link-only group joining (previously anyone could join
+any group by guessing its ID), blocking enforced at the socket layer (not
+just stored), room-level access control on message history (previously any
+authenticated user could read any room by guessing its ID), real-time
+delivery and typing indicators, online/offline presence, offline push
+notification fallback, responsive desktop/mobile layout, a Contacts tab.
 
-The backend also has a working REST route for status/stories (`/api/status`)
-that this frontend doesn't have a screen for yet.
+Also built: privacy toggles (last-seen, online-status, read-receipts —
+enforced server-side, not just hidden in the UI), device/session management
+(list + revoke push-notification devices), GDPR-style data export, a
+one-time onboarding screen, loading skeletons and empty/error states across
+the conversation list and message view, message send-status with automatic
+retry-on-timeout and a manual retry button, a global toast system, an
+offline/reconnecting banner, a React error boundary, optional Sentry crash
+reporting (backend + frontend) and PostHog analytics (backend + frontend) —
+both fully no-op if you don't set their API keys, optional Firebase web
+push notifications (same — no-op without config).
+
+**Known limitations, stated plainly rather than papered over:**
+- Auth is a stateless 30-day JWT with no server-side session table. "Sessions"
+  in Settings are really just push-notification device registrations —
+  revoking one stops push there, but doesn't invalidate a JWT already sitting
+  in that device's browser storage. A real fix means short-lived access
+  tokens + a revocable refresh-token table.
+- No full accessibility audit has been done — semantic HTML, labels, and
+  keyboard navigation are used throughout, and the settings modal traps
+  focus and closes on Escape, but this hasn't been tested with a screen
+  reader.
+- The bundle is ~640KB minified (mostly the Firebase SDK for push). Fine for
+  now; code-splitting `lib/push.ts` behind a dynamic `import()` would be the
+  next move if load time matters more than build simplicity.
+- The backend also has a working REST route for status/stories (`/api/status`)
+  that this frontend doesn't have a screen for yet.
 
 ## How people find each other
 

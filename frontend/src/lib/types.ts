@@ -9,6 +9,10 @@ export interface User {
   isOnline?: boolean;
   lastSeen?: string;
   publicKey?: string;
+  onboardedAt?: string | null;
+  showLastSeen?: boolean;
+  showOnlineStatus?: boolean;
+  readReceiptsEnabled?: boolean;
 }
 
 export interface Message {
@@ -28,6 +32,8 @@ export interface Message {
   deliveredAt?: string | null;
   // populated client-side after decryption, never sent over the wire
   text?: string;
+  // client-only send state for optimistic UI - never comes from the server
+  status?: 'sending' | 'sent' | 'failed';
 }
 
 export interface Conversation {

@@ -6,6 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { signToken, verifyJWT } from '../utils/jwt';
 import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/email';
 import { getBlockedUserIds } from '../utils/permissions';
+import { track } from '../utils/analytics';
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -69,8 +70,24 @@ const publicUserSelect = {
   bio: true,
   isOnline: true,
   lastSeen: true,
-  publicKey: true
+  publicKey: true,
+  showLastSeen: true,
+  showOnlineStatus: true
 } as const;
+
+// Respects the profile owner's own privacy toggles before the data leaves
+// the server — hiding it client-side only would mean the browser still
+// received it over the wire.
+function applyProfilePrivacy<T extends { showLastSeen?: boolean; showOnlineStatus?: boolean; isOnline?: boolean; lastSeen?: Date | null }>(
+  user: T
+): Omit<T, 'showLastSeen' | 'showOnlineStatus'> {
+  const { showLastSeen, showOnlineStatus, ...rest } = user;
+  return {
+    ...rest,
+    ...(showOnlineStatus === false ? { isOnline: undefined } : {}),
+    ...(showLastSeen === false ? { lastSeen: undefined } : {})
+  } as Omit<T, 'showLastSeen' | 'showOnlineStatus'>;
+}
 
 router.post('/register', async (req: Request, res: Response) => {
   try {
@@ -101,6 +118,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     sendVerificationEmail(user.email, emailVerifyToken, user.displayName).catch(() => {});
+    track(user.id, 'account_registered');
 
     const { passwordHash: _omit, emailVerifyToken: _t, ...safeUser } = user;
     res.json({ user: safeUser, token: signToken(user.id) });
@@ -119,6 +137,7 @@ router.post('/login', async (req: Request, res: Response) => {
     if (!valid) return res.status(401).json({ error: 'Incorrect password' });
 
     const { passwordHash: _omit, emailVerifyToken: _t, passwordResetToken: _r, ...safeUser } = user;
+    track(user.id, 'logged_in');
     res.json({ user: safeUser, token: signToken(user.id) });
   } catch (e: any) {
     res.status(400).json({ error: e.errors?.[0]?.message || e.message || 'Login failed' });
@@ -221,6 +240,7 @@ router.delete('/account', requireAuth, async (req: AuthedRequest, res: Response)
       data: { isDeleted: true, encryptedPayload: 'This account was deleted', mediaUrl: null, mediaThumbUrl: null }
     });
     await prisma.user.delete({ where: { id: user.id } });
+    track(user.id, 'account_deleted');
 
     res.json({ ok: true });
   } catch (e: any) {
@@ -239,7 +259,7 @@ router.get('/search', requireAuth, async (req: AuthedRequest, res: Response) => 
     take: 10,
     select: publicUserSelect
   });
-  res.json(users);
+  res.json(users.map(applyProfilePrivacy));
 });
 
 // Find someone by their exact phone number (the number itself is never
@@ -257,7 +277,7 @@ router.post('/lookup-phone', requireAuth, async (req: AuthedRequest, res: Respon
     select: publicUserSelect
   });
   if (!user) return res.status(404).json({ error: 'No WENET user with that number' });
-  res.json(user);
+  res.json(applyProfilePrivacy(user));
 });
 
 router.get('/me', requireAuth, async (req: AuthedRequest, res: Response) => {
@@ -265,6 +285,63 @@ router.get('/me', requireAuth, async (req: AuthedRequest, res: Response) => {
   if (!user) return res.status(404).json({ error: 'Not found' });
   const { passwordHash: _omit, emailVerifyToken: _t, passwordResetToken: _r, ...safeUser } = user;
   res.json(safeUser);
+});
+
+// --- onboarding -------------------------------------------------------
+
+router.post('/onboarded', requireAuth, async (req: AuthedRequest, res: Response) => {
+  await prisma.user.update({ where: { id: req.userId }, data: { onboardedAt: new Date() } });
+  res.json({ ok: true });
+});
+
+// --- privacy settings ---------------------------------------------------
+
+const privacySchema = z.object({
+  showLastSeen: z.boolean().optional(),
+  showOnlineStatus: z.boolean().optional(),
+  readReceiptsEnabled: z.boolean().optional()
+});
+
+router.patch('/privacy', requireAuth, async (req: AuthedRequest, res: Response) => {
+  try {
+    const data = privacySchema.parse(req.body);
+    const user = await prisma.user.update({ where: { id: req.userId }, data });
+    const { passwordHash: _omit, emailVerifyToken: _t, passwordResetToken: _r, ...safeUser } = user;
+    res.json(safeUser);
+  } catch (e: any) {
+    res.status(400).json({ error: e.errors?.[0]?.message || 'Update failed' });
+  }
+});
+
+// --- data export (GDPR-style "download my data") -------------------------
+
+// Ciphertext for messages is included as-is — WENET's server can't decrypt
+// it either, so an export can only ever contain what the server itself
+// holds, not the plaintext of past conversations.
+router.get('/export', requireAuth, async (req: AuthedRequest, res: Response) => {
+  const userId = req.userId!;
+  const [user, contacts, groups, sentMessages, devices] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId } }),
+    prisma.contact.findMany({ where: { ownerId: userId }, include: { contact: { select: { username: true, displayName: true } } } }),
+    prisma.groupMember.findMany({ where: { userId }, include: { group: { select: { name: true, id: true } } } }),
+    prisma.message.findMany({ where: { senderId: userId }, select: { id: true, roomId: true, groupId: true, encryptedPayload: true, createdAt: true } }),
+    prisma.device.findMany({ where: { userId }, select: { label: true, userAgent: true, createdAt: true, lastSeen: true } })
+  ]);
+  if (!user) return res.status(404).json({ error: 'Not found' });
+
+  const { passwordHash: _omit, emailVerifyToken: _t, passwordResetToken: _r, ...safeUser } = user;
+  res.setHeader('Content-Disposition', 'attachment; filename="wenet-data-export.json"');
+  res.json({
+    exportedAt: new Date().toISOString(),
+    profile: safeUser,
+    contacts: contacts.map((c: typeof contacts[number]) => c.contact),
+    groups: groups.map((g: typeof groups[number]) => ({ id: g.group.id, name: g.group.name, role: g.role, joinedAt: g.joinedAt })),
+    devices,
+    sentMessages: {
+      note: 'Content is end-to-end encrypted ciphertext — WENET cannot decrypt it server-side either.',
+      messages: sentMessages
+    }
+  });
 });
 
 // Public-ish profile lookup - used by the client to show a chat header/avatar
@@ -276,7 +353,7 @@ router.get('/user/:id', requireAuth, async (req: Request, res: Response) => {
     select: publicUserSelect
   });
   if (!user) return res.status(404).json({ error: 'Not found' });
-  res.json(user);
+  res.json(applyProfilePrivacy(user));
 });
 
 export default router;

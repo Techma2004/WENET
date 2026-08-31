@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
@@ -10,6 +11,8 @@ import { verifyJWT } from './utils/jwt';
 import { sendFCM } from './utils/fcm';
 import { isBlockedEitherWay, isGroupMember } from './utils/permissions';
 import { generalLimiter, authLimiter } from './middleware/rateLimiter';
+import { initSentry, captureException } from './utils/observability';
+import { track, shutdownAnalytics } from './utils/analytics';
 
 import authRoutes from './routes/auth';
 import mediaRoutes from './routes/media';
@@ -17,14 +20,22 @@ import messageRoutes from './routes/messages';
 import groupRoutes from './routes/groups';
 import statusRoutes from './routes/status';
 import contactRoutes from './routes/contacts';
+import deviceRoutes from './routes/devices';
 
 interface AuthedRequest extends Request {
   userId?: string;
 }
 
+initSentry();
+
 const prisma = new PrismaClient();
 const app = express();
 app.set('trust proxy', 1); // Render sits behind a proxy - needed for express-rate-limit to see real client IPs
+
+// Security headers (HSTS, no-sniff, frame-deny, etc.) — cheap to add,
+// meaningfully reduces the attack surface for a service that handles
+// auth tokens and (encrypted) personal messages.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '*')
   .split(',')
@@ -67,6 +78,16 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/contacts', contactRoutes);
+app.use('/api/devices', deviceRoutes);
+
+// Catch-all error handler: anything thrown or rejected inside a route that
+// wasn't already caught locally lands here instead of hanging the request
+// or leaking a stack trace to the client.
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  captureException(err, { path: req.path, method: req.method });
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Something went wrong on our end. Please try again.' });
+});
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -89,7 +110,7 @@ io.use((socket: any, next) => {
 
 io.on('connection', async (socket: any) => {
   const uid: string = socket.userId;
-  await prisma.user.update({ where: { id: uid }, data: { isOnline: true } });
+  const self = await prisma.user.update({ where: { id: uid }, data: { isOnline: true } });
   socket.join(`user:${uid}`);
 
   // join all of this user's groups
@@ -104,7 +125,11 @@ io.on('connection', async (socket: any) => {
   });
   if (pending.length) socket.emit('flush_messages', pending);
 
-  socket.broadcast.emit('server:presence', { userId: uid, isOnline: true });
+  // Respect the "show online status" privacy toggle: if it's off, other
+  // users simply never learn this user came online in the first place.
+  if (self.showOnlineStatus) {
+    socket.broadcast.emit('server:presence', { userId: uid, isOnline: true });
+  }
 
   socket.on('join_room', (roomId: string) => socket.join(roomId));
 
@@ -133,6 +158,13 @@ io.on('connection', async (socket: any) => {
   });
 
   socket.on('client:read_ack', async ({ messageIds }: { messageIds: string[] }) => {
+    // Whether *this* user's read status is shared with others is their own
+    // privacy choice — messages are still marked read for badge/unread-count
+    // purposes app-side via delivery, but we don't persist or broadcast a
+    // read receipt if they've turned that off.
+    const reader = await prisma.user.findUnique({ where: { id: uid }, select: { readReceiptsEnabled: true } });
+    if (!reader?.readReceiptsEnabled) return;
+
     for (const mid of messageIds) {
       await prisma.messageRead.upsert({
         where: { messageId_userId: { messageId: mid, userId: uid } },
@@ -199,9 +231,11 @@ io.on('connection', async (socket: any) => {
         io.to(`user:${uid}`).emit('server:new_message', msg);
       }
 
+      track(uid, 'message_sent', { kind: groupId ? 'group' : 'direct', hasMedia: !!mediaUrl });
       cb?.({ ok: true, id: msg.id });
     } catch (e: any) {
-      cb?.({ ok: false, error: e.message });
+      captureException(e, { event: 'client:send_message', userId: uid });
+      cb?.({ ok: false, error: 'Message could not be sent. Please try again.' });
     }
   });
 
@@ -225,29 +259,40 @@ io.on('connection', async (socket: any) => {
   });
 
   socket.on('disconnect', async () => {
-    await prisma.user.update({ where: { id: uid }, data: { isOnline: false, lastSeen: new Date() } });
-    socket.broadcast.emit('server:presence', { userId: uid, isOnline: false, lastSeen: new Date() });
+    const updated = await prisma.user.update({ where: { id: uid }, data: { isOnline: false, lastSeen: new Date() } });
+    if (updated.showOnlineStatus) {
+      socket.broadcast.emit('server:presence', {
+        userId: uid,
+        isOnline: false,
+        lastSeen: updated.showLastSeen ? updated.lastSeen : undefined
+      });
+    }
   });
 });
 
 // nightly cleanup: delivered messages older than 7 days, expired statuses
 cron.schedule('0 3 * * *', async () => {
-  const r = await prisma.message.deleteMany({ where: { deliveredAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } });
-  await prisma.status.deleteMany({ where: { expiresAt: { lt: new Date() } } });
-  console.log(`[CRON] cleanup done, removed ${r.count} messages`);
+  try {
+    const r = await prisma.message.deleteMany({ where: { deliveredAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } });
+    await prisma.status.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+    console.log(`[CRON] cleanup done, removed ${r.count} messages`);
+  } catch (e) {
+    captureException(e, { job: 'nightly-cleanup' });
+  }
 });
 
 const PORT = process.env.PORT || 10000;
 httpServer.listen(PORT, () => console.log(`WENET listening on ${PORT}`));
 
 // --- stability: don't let one bad request/promise take the whole process down ---
-process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
-process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (err) => captureException(err));
+process.on('uncaughtException', (err) => captureException(err));
 
 async function shutdown(signal: string) {
   console.log(`[${signal}] shutting down gracefully`);
   httpServer.close(() => console.log('http server closed'));
   await prisma.$disconnect();
+  await shutdownAnalytics();
   process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

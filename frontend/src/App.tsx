@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './lib/api';
 import { useAuth } from './lib/auth';
 import { useChat } from './lib/chatStore';
+import { useToast } from './lib/toast';
 import { connectSocket, disconnectSocket } from './lib/socket';
 import { unwrapGroupKey, wrapGroupKeyForMember } from './lib/crypto';
+import { identify, resetAnalyticsIdentity, track } from './lib/analytics';
 import AuthScreen from './components/AuthScreen';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import VerifyEmailScreen from './components/VerifyEmailScreen';
 import ResetPasswordScreen from './components/ResetPasswordScreen';
 import VerifyBanner from './components/VerifyBanner';
+import OnboardingScreen from './components/OnboardingScreen';
 import type { Message, User } from './lib/types';
 
 type ConnState = 'connecting' | 'online' | 'offline';
@@ -45,11 +48,34 @@ export default function App() {
   } = useChat();
   const [restoring, setRestoring] = useState(true);
   const [connState, setConnState] = useState<ConnState>('connecting');
+  const [browserOffline, setBrowserOffline] = useState(!navigator.onLine);
   const socketRef = useRef<ReturnType<typeof connectSocket> | null>(null);
+  const wasOffline = useRef(false);
+  const { push: toast } = useToast();
 
   useEffect(() => {
     restore().finally(() => setRestoring(false));
   }, []);
+
+  // Network state: the browser's own online/offline events catch total
+  // connectivity loss instantly (no need to wait for a socket timeout),
+  // while the socket's connect/disconnect events catch the "technically
+  // has wifi but can't reach our server" case.
+  useEffect(() => {
+    const goOnline = () => setBrowserOffline(false);
+    const goOffline = () => setBrowserOffline(true);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (user) identify(user.id);
+    else resetAnalyticsIdentity();
+  }, [user?.id]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -57,9 +83,21 @@ export default function App() {
     socketRef.current = socket;
     setConnState('connecting');
 
-    socket.on('connect', () => setConnState('online'));
-    socket.on('disconnect', () => setConnState('offline'));
-    socket.on('connect_error', () => setConnState('offline'));
+    socket.on('connect', () => {
+      setConnState('online');
+      if (wasOffline.current) {
+        toast('Back online.', 'success');
+        wasOffline.current = false;
+      }
+    });
+    socket.on('disconnect', () => {
+      setConnState('offline');
+      wasOffline.current = true;
+    });
+    socket.on('connect_error', () => {
+      setConnState('offline');
+      wasOffline.current = true;
+    });
 
     socket.on('flush_messages', async (msgs: Message[]) => {
       if (!privateJwk) return;
@@ -151,10 +189,28 @@ export default function App() {
     return <AuthScreen />;
   }
 
+  if (!user.onboardedAt) {
+    return (
+      <OnboardingScreen
+        onDone={() => {
+          track('onboarding_completed');
+          useAuth.setState((s) => (s.user ? { user: { ...s.user, onboardedAt: new Date().toISOString() } } : {}));
+        }}
+      />
+    );
+  }
+
+  const showOfflineBanner = browserOffline || connState === 'offline';
+
   return (
     <div className={`app ${activeChat ? 'chat-open' : ''}`}>
       <Sidebar connState={connState} />
-      <div className="chat-pane">
+      <div className="chat-pane" id="main-content">
+        {showOfflineBanner && (
+          <div className="network-banner" role="status">
+            <span className="status-dot" /> {browserOffline ? "You're offline" : 'Reconnecting…'}
+          </div>
+        )}
         <VerifyBanner />
         {activeChat ? (
           <ChatWindow onBack={closeChat} />
