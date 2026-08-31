@@ -6,11 +6,16 @@
   --border: #22303a;
   --accent: #c9873f;
   --accent-strong: #e3a35e;
+  --gradient-primary: linear-gradient(135deg, #c9873f, #e3a35e);
+  --gradient-accent-2: linear-gradient(135deg, #c9873f, #dd6b6b);
   --text: #e9edef;
   --text-muted: #82929b;
   --online: #3fd68a;
+  --danger: #e0546a;
   --danger-bg: #3a2a1a;
   --danger-text: #f0b979;
+  --success-bg: #17301f;
+  --success-text: #6fd88f;
   --radius: 10px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
@@ -107,7 +112,7 @@ input:focus-visible {
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--gradient-primary);
   color: #201105;
   font-weight: 700;
   font-size: 20px;
@@ -115,6 +120,7 @@ input:focus-visible {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(201, 135, 63, 0.35);
 }
 
 .brand h1 {
@@ -150,7 +156,7 @@ input:focus-visible {
 }
 
 .auth-tabs button.active {
-  background: var(--accent);
+  background: var(--gradient-primary);
   color: #201105;
   font-weight: 600;
 }
@@ -188,7 +194,7 @@ input:focus-visible {
 }
 
 .primary-btn {
-  background: var(--accent);
+  background: var(--gradient-primary);
   color: #201105;
   border: none;
   border-radius: 8px;
@@ -196,9 +202,113 @@ input:focus-visible {
   font-weight: 600;
   font-size: 14px;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(201, 135, 63, 0.3);
+  transition: filter 120ms ease, transform 120ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+}
+
+.primary-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.primary-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .primary-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(32, 17, 5, 0.35);
+  border-top-color: #201105;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.required-mark {
+  color: var(--danger-text);
+}
+
+.field-hint {
+  font-size: 11px;
+  margin-top: -2px;
+}
+
+.field-hint-ok {
+  color: var(--success-text);
+}
+
+.field-hint-warn {
+  color: var(--text-muted);
+}
+
+.auth-intro {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.auth-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  line-height: 1.4;
+}
+
+.checkbox-label {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px !important;
+  line-height: 1.5;
+}
+
+.checkbox-label input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.checkbox-label a {
+  color: var(--accent-strong);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent-strong);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.link-btn-inline {
+  align-self: flex-end;
+  margin-top: -8px;
+}
+
+.link-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -284,6 +394,176 @@ input:focus-visible {
 .ghost-btn:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.ghost-btn-sm {
+  font-size: 13px;
+  padding: 4px 6px;
+}
+
+.avatar-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50%;
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.avatar-btn:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Verify-email banner ---------- */
+
+.verify-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(201, 135, 63, 0.16), rgba(227, 163, 94, 0.08));
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.verify-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 100%;
+  max-width: 440px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.account-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.account-summary-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.account-summary-sub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.danger-zone {
+  border: 1px solid rgba(224, 84, 106, 0.35);
+  border-radius: 10px;
+  padding: 16px;
+  background: rgba(224, 84, 106, 0.06);
+}
+
+.danger-zone h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--danger-text);
+}
+
+.danger-zone p {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.danger-btn {
+  background: var(--danger);
+  color: #2a0a10;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+}
+
+.danger-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.danger-confirm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.danger-confirm-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.danger-confirm-form input {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.danger-confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
 }
 
 .sidebar-header-actions {

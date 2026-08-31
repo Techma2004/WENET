@@ -8,6 +8,7 @@ import cron from 'node-cron';
 
 import { verifyJWT } from './utils/jwt';
 import { sendFCM } from './utils/fcm';
+import { isBlockedEitherWay, isGroupMember } from './utils/permissions';
 import { generalLimiter, authLimiter } from './middleware/rateLimiter';
 
 import authRoutes from './routes/auth';
@@ -149,6 +150,24 @@ io.on('connection', async (socket: any) => {
       const existing = await prisma.message.findUnique({ where: { clientMessageId } });
       if (existing) {
         cb?.({ ok: true, id: existing.id, dup: true });
+        return;
+      }
+
+      // Permission checks: never silently allow a message into a group
+      // you're not in, or across a block relationship either direction —
+      // blocking is meant to stop delivery both ways, not just hide it.
+      if (groupId) {
+        if (!(await isGroupMember(groupId, uid))) {
+          cb?.({ ok: false, error: 'not a member of this group' });
+          return;
+        }
+      } else if (recipientId) {
+        if (await isBlockedEitherWay(uid, recipientId)) {
+          cb?.({ ok: false, error: 'blocked' });
+          return;
+        }
+      } else {
+        cb?.({ ok: false, error: 'recipientId or groupId is required' });
         return;
       }
 

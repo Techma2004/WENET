@@ -59,8 +59,28 @@ router.get('/conversations', async (req: AuthedRequest, res: Response) => {
   res.json(conversations);
 });
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (req: AuthedRequest, res: Response) => {
   const { roomId, groupId, limit = '50', cursor } = req.query;
+  const userId = req.userId!;
+
+  // Access control: you can only read messages from a 1:1 room you're a
+  // participant of, or a group you're a member of. Without this, any
+  // authenticated user could pass an arbitrary roomId/groupId and read
+  // someone else's conversation metadata (timestamps, read receipts,
+  // reactions) even though the payload itself is ciphertext.
+  if (groupId) {
+    const membership = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: groupId as string, userId } }
+    });
+    if (!membership) return res.status(403).json({ error: 'Not a member of this group' });
+  } else if (roomId) {
+    if (!(roomId as string).split('_').includes(userId)) {
+      return res.status(403).json({ error: 'Not a participant in this conversation' });
+    }
+  } else {
+    return res.status(400).json({ error: 'roomId or groupId is required' });
+  }
+
   const where: Prisma.MessageWhereInput = { isDeleted: false };
   if (roomId) where.roomId = roomId as string;
   if (groupId) where.groupId = groupId as string;

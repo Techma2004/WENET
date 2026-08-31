@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { isBlockedEitherWay } from '../utils/permissions';
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -35,6 +36,10 @@ router.post('/', async (req: AuthedRequest, res: Response) => {
 
   const target = await prisma.user.findUnique({ where: { id: contactId } });
   if (!target) return res.status(404).json({ error: 'User not found' });
+
+  if (await isBlockedEitherWay(req.userId!, contactId)) {
+    return res.status(403).json({ error: "You can't add this user as a contact" });
+  }
 
   await prisma.contact.upsert({
     where: { ownerId_contactId: { ownerId: req.userId!, contactId } },

@@ -7,6 +7,7 @@ import type { User } from '../lib/types';
 import Avatar from './Avatar';
 import NewGroupModal from './NewGroupModal';
 import ContactsPanel from './ContactsPanel';
+import AccountSettingsModal from './AccountSettingsModal';
 
 const CONN_LABEL: Record<string, string> = {
   connecting: 'Connecting…',
@@ -21,6 +22,7 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<User[]>([]);
   const [showNewGroup, setShowNewGroup] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -40,7 +42,9 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-me">
-          <Avatar name={user?.displayName || ''} url={user?.avatarUrl} />
+          <button className="avatar-btn" onClick={() => setShowSettings(true)} title="Account settings">
+            <Avatar name={user?.displayName || ''} url={user?.avatarUrl} />
+          </button>
           <div>
             <div className="sidebar-me-name">{user?.displayName}</div>
             <div className={`conn-pill conn-${connState}`}>{CONN_LABEL[connState]}</div>
@@ -129,6 +133,7 @@ export default function Sidebar({ connState }: { connState: 'connecting' | 'onli
       </div>
 
       {showNewGroup && socket && <NewGroupModal onClose={() => setShowNewGroup(false)} socket={socket} />}
+      {showSettings && <AccountSettingsModal onClose={() => setShowSettings(false)} />}
     </aside>
   );
 }

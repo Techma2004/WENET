@@ -8,25 +8,31 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(uuid())
-  username     String        @unique
-  phoneHash    String        @unique
-  passwordHash String
-  displayName  String
-  bio          String?       @default("Hey there! I'm on WENET")
-  avatarUrl    String?
-  publicKey    String
-  isOnline     Boolean       @default(false)
-  lastSeen     DateTime      @default(now())
-  createdAt    DateTime      @default(now())
-  blockedBy    Block[]       @relation("blocked")
-  blocked      Block[]       @relation("blocker")
-  contactOf    Contact[]     @relation("contact")
-  contacts     Contact[]     @relation("owner")
-  devices      Device[]
-  groupMembers GroupMember[]
-  reactions    Reaction[]
-  statuses     Status[]
+  id                    String        @id @default(uuid())
+  username              String        @unique
+  email                 String        @unique
+  emailVerified         Boolean       @default(false)
+  emailVerifyToken      String?       @unique
+  emailVerifyExpires    DateTime?
+  passwordResetToken    String?       @unique
+  passwordResetExpires  DateTime?
+  phoneHash             String        @unique
+  passwordHash          String
+  displayName           String
+  bio                   String?       @default("Hey there! I'm on WENET")
+  avatarUrl             String?
+  publicKey             String
+  isOnline              Boolean       @default(false)
+  lastSeen              DateTime      @default(now())
+  createdAt             DateTime      @default(now())
+  blockedBy             Block[]       @relation("blocked")
+  blocked               Block[]       @relation("blocker")
+  contactOf             Contact[]     @relation("contact")
+  contacts              Contact[]     @relation("owner")
+  devices               Device[]
+  groupMembers          GroupMember[]
+  reactions             Reaction[]
+  statuses              Status[]
 }
 
 model Device {

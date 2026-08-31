@@ -7,6 +7,9 @@ import { unwrapGroupKey, wrapGroupKeyForMember } from './lib/crypto';
 import AuthScreen from './components/AuthScreen';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
+import VerifyEmailScreen from './components/VerifyEmailScreen';
+import ResetPasswordScreen from './components/ResetPasswordScreen';
+import VerifyBanner from './components/VerifyBanner';
 import type { Message, User } from './lib/types';
 
 type ConnState = 'connecting' | 'online' | 'offline';
@@ -133,6 +136,17 @@ export default function App() {
     );
   }
 
+  // Standalone landing pages for the links sent by email — no auth needed,
+  // and intentionally short-circuit before the login-gate check below.
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  if (path === '/verify-email' && params.get('token')) {
+    return <VerifyEmailScreen token={params.get('token')!} />;
+  }
+  if (path === '/reset-password' && params.get('token')) {
+    return <ResetPasswordScreen token={params.get('token')!} />;
+  }
+
   if (!user || !token) {
     return <AuthScreen />;
   }
@@ -141,6 +155,7 @@ export default function App() {
     <div className={`app ${activeChat ? 'chat-open' : ''}`}>
       <Sidebar connState={connState} />
       <div className="chat-pane">
+        <VerifyBanner />
         {activeChat ? (
           <ChatWindow onBack={closeChat} />
         ) : (

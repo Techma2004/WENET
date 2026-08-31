@@ -2,6 +2,8 @@ export interface User {
   id: string;
   username: string;
   displayName: string;
+  email?: string;
+  emailVerified?: boolean;
   avatarUrl?: string | null;
   bio?: string | null;
   isOnline?: boolean;
